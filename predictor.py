@@ -1,123 +1,95 @@
 # Load Libraries.
-import pandas as pd
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from transformers import AutoTokenizer, TFAutoModel
+from ast import literal_eval
+import json
 import numpy as np
-from transformers import AutoTokenizer
 import torch
-from torch.nn.utils.rnn import pad_sequence
-from ABSA_SentimentMultiEmiten.model.bert import bert_ABSA
 import preprocessing
 
-# Function Load Model.
-def load_model(model, path):
-    model.load_state_dict(torch.load(path, map_location=torch.device('cpu')), strict=False)
-    return model
 
 # Define / Initialization from Model.
 DEVICE = torch.device("cpu")
-pretrain_model_name = "indolem/indobert-base-uncased"
-tokenizer = AutoTokenizer.from_pretrained(pretrain_model_name)
-model_ABSA = bert_ABSA(pretrain_model_name).to(DEVICE)
-model_path = './models/bert_ABSA_11.pkl'
-model_ABSA = load_model(model_ABSA, model_path)
+pretrain_model_name = "indobenchmark/indobert-base-p2"
+tokenizer = AutoTokenizer.from_pretrained(pretrain_model_name )
+model_BERT = TFAutoModel.from_pretrained("indobenchmark/indobert-base-p2")
+model_path = './models/model_baseline_bert-cnn.h5'
+model_BCL = load_model(model_path)
 
-# Function Predict Sentiment Analysis
-## Function ini mengembalikan nilai sentiment analisis kalimat (sentence) terhadap emiten (aspect)
-def predict(sentence, aspect, tokenizer):
-    t1 = tokenizer.tokenize(sentence)
-    t2 = tokenizer.tokenize(aspect)
+class_names = ['budaya', 'ekonomi', 'kesehatan', 'olahraga', 'otomotif',
+               'pertahanan dan keamanan', 'politik', 'teknologi', 'none']
 
-    word_pieces = ['[cls]']
-    word_pieces += t1
-    word_pieces += ['[sep]']
-    word_pieces += t2
+# Function Load Model.
+def load_model(path):
+  model_loaded = load_model(path)
+  # model.load_state_dict(torch.load(path, map_location=torch.device('cpu')), strict=False)
+  return model_loaded 
 
-    segment_tensor = [0] + [0]*len(t1) + [0] + [1]*len(t2)
+def create_input_ids(sentences):
+  # max_length = 32
 
-    ids = tokenizer.convert_tokens_to_ids(word_pieces)
-    input_tensor = torch.tensor([ids]).to(DEVICE)
-    segment_tensor = torch.tensor(segment_tensor).to(DEVICE)
+  # Tokenize input sentences
+  tokenized_res = [tokenizer.tokenize(sentence) for sentence in sentences]
+  # print("Tokenized Sentences:", tokenized_res)
+  
+  # Encode input sentences
+  tokenized_sentences = [tokenizer.encode(sentence, add_special_tokens=True)[:512] for sentence in sentences]
+  
+  # Add padding to input IDs
+  max_length = max([len(ids) for ids in tokenized_sentences])
+  input_ids = [ids + [0] * (max_length - len(ids)) for ids in tokenized_sentences]
+  # print("Padded Input IDs:", input_ids)
 
-    with torch.no_grad():
-        outputs = model_ABSA(input_tensor, None, None, segments_tensors=segment_tensor)
-        _, predictions = torch.max(outputs, dim=1)
-    
-    return word_pieces, predictions, outputs
+  return input_ids
 
-# Function Controller Predict
-# Output this Function :
-## Sentence : Sentence / Kalimat yang displit untuk prediksi kemudian disatukan per aspact.
-## Aspect : Emiten yang di predict.
-## Sentiment : Nilai Sentiment Hasil Function Predict
-def predict_sentence(s, aspect):
-  arr_sentence_clean, arr_sentence_dirt  = preprocessing.preprocessing_text(s, aspect)
+def word_embed(arr_data):
+  max_length = 32
+  x_input_ids = create_input_ids(arr_data)
+  x_input_ids_padded = pad_sequences(x_input_ids, maxlen=max_length, padding='post')
 
-  output = []
+  with torch.no_grad():
+      x_clean_embed = model_BERT(np.array(x_input_ids_padded ))[0]
+  return x_clean_embed
+
+def predict_single_data(news_title):
+  x_clean = preprocessing.preprocessing_str(news_title)
+  x_clean = [x_clean]
+  x_clean_embed = word_embed(x_clean)
+  prediksi = model_BCL.predict(x_clean_embed)
+  
+  topik = "Tidak termasuk ke topik manapun"
+  # Cetak presentase hasil prediksi untuk setiap kelas
+  for i in range(len(prediksi[0])):
+    if (prediksi[0][i]>0.5):
+      topik = class_names[i]
+  return topik
+
+def predict_data_collection(arr_news_title):
+  # print(arr_news_title)
+  # arr_news_title = json.loads(arr_news_title)
+  # Remove the opening and closing brackets and split the string by whitespace
+  elements = arr_news_title.split('\n')
+
+  # Convert the elements into a list
+  array_data = [element.strip("'") for element in elements]
+  x_clean = preprocessing.preprocessing(array_data)
+  x_clean_embed = word_embed(x_clean)
+
+  predicted_result = model_BCL.predict(x_clean_embed)  
+
+  labels = []
   i = 0
-  sentiments = ["Negative", "Neutral", "Positive"]
-  final_sentence_clean = ""
-  final_sentence_dirt = ""
+  while (i < len(predicted_result)):
+    topik = class_names[8]
+    for j in range(len(predicted_result[i])):
+      if (predicted_result[i][j]>0.5):
+        topik = class_names[j]
+    labels.append(topik)
+    i = i + 1
 
-  while (i < (len(arr_sentence_clean))):
-    final_sentence_clean = final_sentence_clean + " " + arr_sentence_clean[i]
-    final_sentence_dirt = final_sentence_dirt + " " + arr_sentence_dirt[i]
-    i = i+1
+  print(array_data)
 
-  x, y, z = predict(final_sentence_clean , aspect, tokenizer)  
-  y_str = str(y)
-  sentiment = sentiments[int(y_str[8])]
-  if final_sentence_clean != "" :
-    output.append({
-      "sentence": final_sentence_dirt.strip(),
-      "aspect": aspect,
-      "sentiment": sentiment
-    })
-  
-  return output
+  return str(labels)
 
-# Function Controller Predict
-# Output this Function :
-## Sentence : Sentence / Kalimat yang displit untuk prediksi.
-## Aspect : Emiten yang di predict.
-## Sentiment : Nilai Sentiment Hasil Function Predict
-def predict_sentence_asli(s, aspect):
-  arr_sentence_clean, arr_sentence_dirt  = preprocessing.preprocessing_text(s, aspect)
 
-  output = []
-  i = 0
-  sentiments = ["Negative", "Neutral", "Positive"]
-  
-  while (i < (len(arr_sentence_clean))):
-    x, y, z = predict(arr_sentence_clean[i] , aspect, tokenizer)
-    
-    y_str = str(y)
-    sentiment = sentiments[int(y_str[8])]
-    output.append({
-      "sentence": arr_sentence_dirt[i].strip(),
-      "aspect": aspect,
-      "sentiment": sentiment
-    })
-    i = i+1
-  
-  return output
-
-# Function Get All Datalist Emiten
-def get_data_emiten():
-  #Data emiten ini diambil dari website www.idx.co.id dan discrapping pada tanggal 22 Agustus 2022.
-  return pd.read_csv("./data/daftar_emiten.csv")
-
-# Function Controller Predict Emiten Saham
-def get_final_sentiment_artikel(artikel, data_emiten=[]):
-  output = []
-
-  # 1 input/predict all emiten
-  if(data_emiten==[]): 
-    data_emiten = get_data_emiten().KodeEmiten
-  # 2 Input/predict specific emiten
-  else: 
-    data_emiten = data_emiten.split()
-  # Predict Emiten from Input or Datalist
-  for emiten in data_emiten:
-    if(emiten in artikel):
-      output.extend(predict_sentence(artikel, emiten))
-  
-  return output
