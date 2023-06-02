@@ -10,7 +10,7 @@ app = FastAPI()
 def root():
     return {"message": "Welcome to Indonesian Language News Topic MuliClassification FastAPI"}
 
-# API Route - Predict Sentiment for ALl Emiten. Return JSON.
+# API Route - Predict single data
 @app.post("/predict_single_data")
 def predict_single_data(news_title):
     if(not(news_title)):
@@ -18,7 +18,7 @@ def predict_single_data(news_title):
 
     return predictor.predict_single_data(news_title)
 
-## API Route - Predict Sentiment for Spesific Emiten. Return JSON.
+## API Route - Predict group of data
 @app.post("/predict_data_collection")
 def predict_data_collection(news_title):
     if(not(news_title)):
